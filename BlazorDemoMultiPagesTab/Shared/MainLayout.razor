@@ -1,0 +1,268 @@
+﻿@inherits MultiPagesTabLayout
+@inject NavigationManager navmgr
+
+@code{
+
+    TimeSpan GetUrlMaxLifeSpan(string url)
+    {
+        if (url.Contains("/fetchdata")) // Let /fetachdata always refresh
+            return TimeSpan.Zero;
+
+        if (url.Contains("/counter"))   // Let /counter expires in 10 seconds
+            return TimeSpan.FromSeconds(10);
+
+        return TimeSpan.FromSeconds(-1);    //other pages never expires
+    }
+
+    class PageItem
+    {
+        public string Url;
+        public RenderFragment PageBody;
+        public DateTime StartTime = DateTime.Now;
+        public DateTime ActiveTime = DateTime.Now;
+        public TimeSpan MaxLifeSpan;
+
+        public Type PageType;
+        public IReadOnlyDictionary<string, object> RouteValues;
+
+        public object Instance;
+
+        TextRenderer _textRenderer;
+
+        public void BuildCustomBodyRenderer(Type pageType, IReadOnlyDictionary<string, object> routeValues)
+        {
+            this.PageType = pageType;
+            this.RouteValues = routeValues;
+            this.PageBody = CustomBodyRenderer;
+        }
+
+        void CustomBodyRenderer(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+        {
+            builder.OpenComponent(0, PageType);
+            builder.SetKey(this.StartTime);
+
+            foreach (KeyValuePair<string, object> routeValue in RouteValues)
+            {
+                builder.AddAttribute(1, routeValue.Key, routeValue.Value);
+            }
+
+            builder.AddComponentReferenceCapture(2, obj =>
+            {
+                Instance = obj;
+
+                if (obj is IMultiPagesTabPage)
+                {
+                    if (_textRenderer != null) _textRenderer.HandleTextChanged();
+                }
+
+            });
+            builder.CloseComponent();
+
+        }
+
+        class TextRenderer : ComponentBase
+        {
+            [Parameter]
+            public PageItem PageItem { get; set; }
+
+            protected override void BuildRenderTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+            {
+                string text = (PageItem.Instance as IMultiPagesTabPage)?.GetTabButtonText();
+                if (string.IsNullOrEmpty(text))
+                    text = "/" + string.Join("/", PageItem.Url.Split('/').Skip(3).ToArray());
+
+                builder.AddContent(0, text);
+            }
+
+            public void HandleTextChanged()
+            {
+                StateHasChanged();
+            }
+        }
+
+        //Render text in sub component to prevent MainLayout refreshs
+        void RenderText(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+        {
+            builder.OpenComponent<TextRenderer>
+                (0);
+            builder.AddAttribute(1, "PageItem", this);
+            builder.AddComponentReferenceCapture(2, obj =>
+            {
+                _textRenderer = (TextRenderer)obj;
+            });
+            builder.CloseComponent();
+        }
+
+        public RenderFragment Text
+        {
+            get
+            {
+                return RenderText;
+            }
+        }
+
+    }
+
+    Dictionary<string, PageItem> bodymap = new Dictionary<string, PageItem>();
+
+    int mainRenderCount = 0;
+}
+
+<div class="sidebar">
+    <NavMenu />
+</div>
+
+
+<style>
+    .multipagetabs {
+        flex: 999;
+        display: flex;
+    }
+
+    .multipagetabitem {
+        padding: 2px;
+        margin: 0 5px;
+        display: flex;
+        align-items: center;
+        padding: 2px 5px;
+    }
+
+        .multipagetabitem i {
+            display: inline-block;
+            margin-left: 4px;
+            padding-bottom: 3px;
+            opacity: 0.5;
+            transition: color linear 0.3s;
+            color: #999;
+        }
+
+            .multipagetabitem i:hover {
+                opacity: 1;
+                color: red
+            }
+
+    .multipagetabitem-active {
+        border: solid 1px blue;
+    }
+
+        .multipagetabitem-active a {
+            color: red;
+        }
+
+    .multipagetabitem-deactive {
+        border: solid 1px #999;
+    }
+
+        .multipagetabitem-deactive a {
+            color: black;
+        }
+</style>
+
+
+@{
+
+    bool currurlrendered = false;
+
+    string currenturl = navmgr.Uri;
+
+    PageItem curritem;
+    if (bodymap.TryGetValue(currenturl, out curritem))
+    {
+        curritem.ActiveTime = DateTime.Now;
+    }
+    else
+    {
+        curritem = new PageItem
+        {
+            Url = currenturl,
+            PageBody = Body
+        };
+        curritem.MaxLifeSpan = GetUrlMaxLifeSpan(currenturl);
+        if (curritem.MaxLifeSpan != TimeSpan.Zero)
+        {
+            bodymap[navmgr.Uri] = curritem;
+            if (this.PageType != null)
+            {
+                curritem.BuildCustomBodyRenderer(this.PageType, this.RouteValues);
+            }
+        }
+    }
+
+    mainRenderCount++;
+
+    foreach (PageItem eachitem in bodymap.Values.ToArray())
+    {
+        if (eachitem.Url != currenturl && eachitem.MaxLifeSpan.TotalSeconds > 0 && DateTime.Now - eachitem.ActiveTime > eachitem.MaxLifeSpan)
+            bodymap.Remove(eachitem.Url);
+    }
+
+}
+
+
+<div class="main">
+
+    <div class="top-row px-4">
+
+        <div class="multipagetabs">
+            @foreach (PageItem eachitem in bodymap.Values.OrderBy(v => v.StartTime).ToArray())
+            {
+                void CloseItem()
+                {
+                    if (currenturl == eachitem.Url)
+                    {
+                        var anotheritem = bodymap.Values.OrderByDescending(v => v.ActiveTime).FirstOrDefault(v => v != eachitem);
+                        if (anotheritem != null)
+                        {
+                            navmgr.NavigateTo(anotheritem.Url);
+                            eachitem.MaxLifeSpan = TimeSpan.FromMilliseconds(1);
+                        }
+                        else
+                        {
+                            //Remove last one
+                            //navigate to home, or delete it and refresh?
+                            bodymap.Remove(eachitem.Url);
+                        }
+                    }
+                    else
+                    {
+                        bodymap.Remove(eachitem.Url);
+                    }
+                }
+
+                string classname = "multipagetabitem multipagetabitem-deactive";
+                if (currenturl == eachitem.Url)
+                    classname = "multipagetabitem multipagetabitem-active";
+
+                <span class="@classname">
+                    <a href="@eachitem.Url">@eachitem.Text</a>
+                    <i class="oi oi-circle-x" @onclick="CloseItem"></i>
+                </span>
+            }
+        </div>
+
+        #@mainRenderCount
+        . PageCount : @bodymap.Count
+        ,
+        <button @onclick="StateHasChanged">StateHasChanged</button>
+
+    </div>
+
+
+    @foreach (PageItem eachitem in bodymap.Values)
+    {
+        if (eachitem.Url == currenturl)
+            currurlrendered = true;
+
+        <div @key="eachitem.Url" class="content px-4" style='@(eachitem.Url == currenturl?"":"display:none")'>
+            @eachitem.PageBody
+        </div>
+    }
+
+    @if (!currurlrendered)
+    {
+        <div class="content px-4">
+            @Body
+        </div>
+    }
+
+</div>

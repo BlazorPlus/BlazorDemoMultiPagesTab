@@ -1,0 +1,45 @@
+﻿@page "/"
+@page "/Index/{Message}"
+@implements IMultiPagesTabPage
+
+<h1>Hello, world!</h1>
+
+Welcome to your new app.
+
+<SurveyPrompt Title="How is Blazor working for you?" />
+
+<hr />
+
+Type something test state :
+<input />
+
+<br />
+
+<a href="/">Home</a> <a href="/Index/Hello">Hello</a> <a href="/Index/World">World</a>
+
+<br />
+Message : @Message
+
+<br />
+
+@{
+    renderCount++;
+}
+
+renderCount : @renderCount
+
+@code{
+
+    [Parameter]
+    public string Message { get; set; } = "Home";
+
+    int renderCount = 0;
+
+
+    string IMultiPagesTabPage.GetTabButtonText()
+    {
+        return Message ?? "Home";
+    }
+
+}
+
